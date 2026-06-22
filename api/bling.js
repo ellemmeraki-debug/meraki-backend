@@ -4,8 +4,7 @@ async function kvGet(kvUrl, kvToken, key) {
       headers: { Authorization: `Bearer ${kvToken}` },
       signal: AbortSignal.timeout(4000)
     });
-    const j = await r.json();
-    return j.result ?? null;
+    return (await r.json()).result ?? null;
   } catch { return null; }
 }
 
@@ -24,45 +23,50 @@ export default async function handler(req, res) {
   const data = req.query.data || dataHoje;
 
   const accessToken = await kvGet(KV_URL, KV_TOKEN, 'bling_access_token');
-  if (!accessToken) {
-    return res.status(401).json({ erro: 'Token ausente. Re-autorize via link de convite do Bling.' });
-  }
+  if (!accessToken) return res.status(401).json({ erro: 'Token ausente. Re-autorize.' });
 
-  const path = `/Api/v3/contas/receber?pagina=1&limite=5&dataVencimentoInicial=${data}&dataVencimentoFinal=${data}`;
-
-  let blingResp;
-  try {
+  // Modo diagnóstico: lista contas contábeis únicas de hoje
+  if (req.query.debug === '1') {
     const t0 = Date.now();
-    const r = await fetch(`https://www.bling.com.br${path}`, {
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        Accept: 'application/json',
-        'User-Agent': 'MerakiDashboard/1.0'
-      },
-      signal: AbortSignal.timeout(7000)
-    });
-    const body = await r.text();
-    blingResp = { status: r.status, body, ms: Date.now() - t0 };
-  } catch (e) {
-    return res.status(504).json({ erro: e.message, data });
+    const r = await fetch(
+      `https://www.bling.com.br/Api/v3/contas/receber?pagina=1&limite=100&dataVencimentoInicial=${data}&dataVencimentoFinal=${data}`,
+      { headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' }, signal: AbortSignal.timeout(7000) }
+    );
+    const body = await r.json();
+    const items = body.data || [];
+    const contas = [...new Map(items.map(i => [i.contaContabil?.id, i.contaContabil])).values()].filter(Boolean);
+    const vencimentos = [...new Set(items.map(i => i.vencimento))];
+    return res.status(200).json({ ms: Date.now()-t0, total: items.length, data_buscada: data, vencimentos_encontrados: vencimentos, contas_contabeis: contas });
   }
 
-  if (blingResp.status === 401) return res.status(401).json({ erro: 'Token expirado. Re-autorize.' });
-  if (blingResp.status !== 200) {
-    return res.status(blingResp.status).json({ erro: `Bling ${blingResp.status}`, raw: blingResp.body.slice(0, 500) });
+  // Produção: filtra por contaContabil + data em JS
+  const contaId = req.query.contaId ? Number(req.query.contaId) : null;
+
+  let pagina = 1, todos = [], timed = false;
+  const deadline = Date.now() + 6000;
+  while (Date.now() < deadline) {
+    let r;
+    try {
+      r = await fetch(
+        `https://www.bling.com.br/Api/v3/contas/receber?pagina=${pagina}&limite=100&dataVencimentoInicial=${data}&dataVencimentoFinal=${data}`,
+        { headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' }, signal: AbortSignal.timeout(5000) }
+      );
+    } catch(e) { return res.status(504).json({ erro: e.message }); }
+    if (!r.ok) return res.status(r.status).json({ erro: `Bling ${r.status}` });
+    const body = await r.json();
+    const items = body.data || [];
+    todos = todos.concat(items);
+    if (items.length < 100) break;
+    pagina++;
   }
 
-  let json;
-  try { json = JSON.parse(blingResp.body); }
-  catch { return res.status(500).json({ erro: 'JSON invalido', raw: blingResp.body.slice(0, 300) }); }
-
-  const items = json.data || [];
-
-  // Mostra estrutura completa dos primeiros 2 registros para diagnóstico
-  return res.status(200).json({
-    data,
-    bling_ms: blingResp.ms,
-    total_na_pagina: items.length,
-    primeiros_registros: items.slice(0, 2)
+  // Filtra por contaContabil se passado, senão por "porcelana" no descricao
+  const filtrados = todos.filter(i => {
+    const desc = (i.contaContabil?.descricao || '').toLowerCase();
+    if (contaId) return i.contaContabil?.id === contaId;
+    return desc.includes('porcelana');
   });
-      }
+
+  const faturamento = filtrados.reduce((s, i) => s + (parseFloat(i.valor) || 0), 0);
+  return res.status(200).json({ faturamento, pedidos: filtrados.length, data, total_registros: todos.length });
+}
