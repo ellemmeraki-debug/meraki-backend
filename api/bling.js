@@ -8,6 +8,9 @@ async function kvGet(kvUrl, kvToken, key) {
   } catch { return null; }
 }
 
+// NUVEMSHOP DECORADA = conta contabil da Porcelana Decorada
+const CONTA_PORCELANA_ID = 14888102402;
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
@@ -25,48 +28,45 @@ export default async function handler(req, res) {
   const accessToken = await kvGet(KV_URL, KV_TOKEN, 'bling_access_token');
   if (!accessToken) return res.status(401).json({ erro: 'Token ausente. Re-autorize.' });
 
-  // Modo diagnóstico: lista contas contábeis únicas de hoje
-  if (req.query.debug === '1') {
-    const t0 = Date.now();
-    const r = await fetch(
-      `https://www.bling.com.br/Api/v3/contas/receber?pagina=1&limite=100&dataVencimentoInicial=${data}&dataVencimentoFinal=${data}`,
-      { headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' }, signal: AbortSignal.timeout(7000) }
-    );
-    const body = await r.json();
-    const items = body.data || [];
-    const contas = [...new Map(items.map(i => [i.contaContabil?.id, i.contaContabil])).values()].filter(Boolean);
-    const vencimentos = [...new Set(items.map(i => i.vencimento))];
-    return res.status(200).json({ ms: Date.now()-t0, total: items.length, data_buscada: data, vencimentos_encontrados: vencimentos, contas_contabeis: contas });
-  }
-
-  // Produção: filtra por contaContabil + data em JS
-  const contaId = req.query.contaId ? Number(req.query.contaId) : null;
-
-  let pagina = 1, todos = [], timed = false;
-  const deadline = Date.now() + 6000;
-  while (Date.now() < deadline) {
+  // O filtro de data da URL do Bling nao funciona — filtramos por dataEmissao em JS.
+  // Buscamos 2 paginas (200 registros) com filtro de emissao para reduzir carga.
+  let todos = [];
+  for (let pagina = 1; pagina <= 2; pagina++) {
     let r;
     try {
       r = await fetch(
-        `https://www.bling.com.br/Api/v3/contas/receber?pagina=${pagina}&limite=100&dataVencimentoInicial=${data}&dataVencimentoFinal=${data}`,
-        { headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' }, signal: AbortSignal.timeout(5000) }
+        `https://www.bling.com.br/Api/v3/contas/receber?pagina=${pagina}&limite=100&dataEmissaoInicial=${data}&dataEmissaoFinal=${data}`,
+        {
+          headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json', 'User-Agent': 'MerakiDashboard/1.0' },
+          signal: AbortSignal.timeout(6000)
+        }
       );
-    } catch(e) { return res.status(504).json({ erro: e.message }); }
-    if (!r.ok) return res.status(r.status).json({ erro: `Bling ${r.status}` });
+    } catch (e) {
+      if (pagina === 1) return res.status(504).json({ erro: e.message });
+      break; // se der timeout na pag 2, usa o que ja tem
+    }
+    if (!r.ok) {
+      if (r.status === 401) return res.status(401).json({ erro: 'Token expirado. Re-autorize.' });
+      break;
+    }
     const body = await r.json();
     const items = body.data || [];
     todos = todos.concat(items);
-    if (items.length < 100) break;
-    pagina++;
+    if (items.length < 100) break; // ultima pagina
   }
 
-  // Filtra por contaContabil se passado, senão por "porcelana" no descricao
-  const filtrados = todos.filter(i => {
-    const desc = (i.contaContabil?.descricao || '').toLowerCase();
-    if (contaId) return i.contaContabil?.id === contaId;
-    return desc.includes('porcelana');
-  });
+  // Filtra por conta contabil (NUVEMSHOP DECORADA) + data de emissao
+  const filtrados = todos.filter(i =>
+    i.contaContabil?.id === CONTA_PORCELANA_ID &&
+    i.dataEmissao === data
+  );
 
   const faturamento = filtrados.reduce((s, i) => s + (parseFloat(i.valor) || 0), 0);
-  return res.status(200).json({ faturamento, pedidos: filtrados.length, data, total_registros: todos.length });
-}
+
+  return res.status(200).json({
+    faturamento,
+    pedidos: filtrados.length,
+    data,
+    total_escaneado: todos.length
+  });
+                                                          }
