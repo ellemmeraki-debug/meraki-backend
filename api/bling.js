@@ -28,8 +28,7 @@ export default async function handler(req, res) {
     return res.status(401).json({ erro: 'Token ausente. Re-autorize via link de convite do Bling.' });
   }
 
-  // Busca apenas página 1 (sem loop de paginação) para evitar timeout
-  const path = `/Api/v3/contas/receber?pagina=1&limite=100&dataVencimentoInicial=${data}&dataVencimentoFinal=${data}`;
+  const path = `/Api/v3/contas/receber?pagina=1&limite=5&dataVencimentoInicial=${data}&dataVencimentoFinal=${data}`;
 
   let blingResp;
   try {
@@ -50,7 +49,7 @@ export default async function handler(req, res) {
 
   if (blingResp.status === 401) return res.status(401).json({ erro: 'Token expirado. Re-autorize.' });
   if (blingResp.status !== 200) {
-    return res.status(blingResp.status).json({ erro: `Bling ${blingResp.status}`, raw: blingResp.body.slice(0, 300) });
+    return res.status(blingResp.status).json({ erro: `Bling ${blingResp.status}`, raw: blingResp.body.slice(0, 500) });
   }
 
   let json;
@@ -58,19 +57,12 @@ export default async function handler(req, res) {
   catch { return res.status(500).json({ erro: 'JSON invalido', raw: blingResp.body.slice(0, 300) }); }
 
   const items = json.data || [];
-  const filtrados = items.filter(i =>
-    (i.categoria?.descricao || '').toLowerCase().includes('porcelana decorada')
-  );
-  const faturamento = filtrados.reduce((s, i) => s + (parseFloat(i.valor) || 0), 0);
 
+  // Mostra estrutura completa dos primeiros 2 registros para diagnóstico
   return res.status(200).json({
-    faturamento,
-    pedidos: filtrados.length,
     data,
-    debug: {
-      total_na_pagina: items.length,
-      bling_ms: blingResp.ms,
-      categorias: [...new Set(items.map(i => i.categoria?.descricao || 'sem categoria'))].slice(0, 10)
-    }
+    bling_ms: blingResp.ms,
+    total_na_pagina: items.length,
+    primeiros_registros: items.slice(0, 2)
   });
-}
+      }
