@@ -1,19 +1,10 @@
-async function kvGet(url, token, key) {
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), 4000);
-  try {
-    const r = await fetch(`${url}/get/${key}`, { headers: { Authorization: `Bearer ${token}` }, signal: ctrl.signal });
-    const data = await r.json();
-    return data.result;
-  } finally { clearTimeout(t); }
-}
+const timeout = (ms, msg) => new Promise((_, r) => setTimeout(() => r(new Error(msg || `Timeout ${ms}ms`)), ms));
 
-async function blingFetch(url, accessToken) {
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), 8000);
-  try {
-    return await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` }, signal: ctrl.signal });
-  } finally { clearTimeout(t); }
+async function kvGet(url, token, key) {
+  const fetch_p = fetch(`${url}/get/${key}`, { headers: { Authorization: `Bearer ${token}` } })
+    .then(r => r.json())
+    .then(d => d.result);
+  return Promise.race([fetch_p, timeout(4000, `Redis GET timeout (${key})`)]);
 }
 
 export default async function handler(req, res) {
@@ -32,13 +23,13 @@ export default async function handler(req, res) {
   const data = req.query.data || dataHoje;
 
   try {
-    console.log('[1] Lendo access_token...');
     const accessToken = await kvGet(KV_URL, KV_TOKEN, 'bling_access_token');
     if (!accessToken) return res.status(401).json({ erro: 'Token ausente. Re-autorize via link de convite do Bling.' });
 
-    console.log('[2] Chamando Bling API...');
-    let pagina = 1, todos = [];
+    // TESTE: retorna só o token (primeiros 10 chars) para confirmar Redis funciona
+    // return res.json({ debug: 'redis ok', token_preview: String(accessToken).slice(0,10) });
 
+    let pagina = 1, todos = [];
     while (true) {
       const url = new URL('https://www.bling.com.br/Api/v3/contas/receber');
       url.searchParams.set('pagina', pagina);
@@ -46,18 +37,16 @@ export default async function handler(req, res) {
       url.searchParams.set('dataVencimentoInicial', data);
       url.searchParams.set('dataVencimentoFinal', data);
 
+      const fetch_p = fetch(url.toString(), { headers: { Authorization: `Bearer ${accessToken}` } });
       let resp;
       try {
-        resp = await blingFetch(url.toString(), accessToken);
+        resp = await Promise.race([fetch_p, timeout(8000, `Bling API timeout página ${pagina}`)]);
       } catch (e) {
-        return res.status(504).json({ erro: `Bling API timeout na página ${pagina}: ${e.message}` });
+        return res.status(504).json({ erro: e.message });
       }
 
-      if (resp.status === 401) return res.status(401).json({ erro: 'Token expirado. Re-autorize via link de convite.' });
-      if (!resp.ok) {
-        const txt = await resp.text();
-        return res.status(resp.status).json({ erro: `Bling API ${resp.status}: ${txt}` });
-      }
+      if (resp.status === 401) return res.status(401).json({ erro: 'Token expirado. Re-autorize.' });
+      if (!resp.ok) return res.status(resp.status).json({ erro: `Bling ${resp.status}: ${await resp.text()}` });
 
       const json = await resp.json();
       const items = json.data || [];
@@ -68,11 +57,8 @@ export default async function handler(req, res) {
 
     const filtrados = todos.filter(i => (i.categoria?.descricao || '').toLowerCase().includes('porcelana decorada'));
     const faturamento = filtrados.reduce((s, i) => s + (parseFloat(i.valor) || 0), 0);
-    console.log('[3] OK:', faturamento, filtrados.length);
-
     return res.status(200).json({ faturamento, pedidos: filtrados.length, data });
   } catch (err) {
-    console.error('[ERRO]', err.message);
     return res.status(500).json({ erro: err.message });
   }
 }
