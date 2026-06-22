@@ -8,6 +8,14 @@ async function kvGet(url, token, key) {
   } finally { clearTimeout(t); }
 }
 
+async function blingFetch(url, accessToken) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 8000);
+  try {
+    return await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` }, signal: ctrl.signal });
+  } finally { clearTimeout(t); }
+}
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
@@ -24,14 +32,13 @@ export default async function handler(req, res) {
   const data = req.query.data || dataHoje;
 
   try {
-    console.log('[1] Lendo access_token do Redis...');
+    console.log('[1] Lendo access_token...');
     const accessToken = await kvGet(KV_URL, KV_TOKEN, 'bling_access_token');
-    if (!accessToken) {
-      return res.status(401).json({ erro: 'Token expirado ou ausente. Acesse o link de convite do Bling para re-autorizar.' });
-    }
-    console.log('[2] Token ok, buscando Contas a Receber...');
+    if (!accessToken) return res.status(401).json({ erro: 'Token ausente. Re-autorize via link de convite do Bling.' });
 
+    console.log('[2] Chamando Bling API...');
     let pagina = 1, todos = [];
+
     while (true) {
       const url = new URL('https://www.bling.com.br/Api/v3/contas/receber');
       url.searchParams.set('pagina', pagina);
@@ -39,14 +46,17 @@ export default async function handler(req, res) {
       url.searchParams.set('dataVencimentoInicial', data);
       url.searchParams.set('dataVencimentoFinal', data);
 
-      const resp = await fetch(url.toString(), { headers: { 'Authorization': `Bearer ${accessToken}` } });
-
-      if (resp.status === 401) {
-        return res.status(401).json({ erro: 'Access token expirado. Re-autorize via link de convite do Bling.' });
+      let resp;
+      try {
+        resp = await blingFetch(url.toString(), accessToken);
+      } catch (e) {
+        return res.status(504).json({ erro: `Bling API timeout na página ${pagina}: ${e.message}` });
       }
+
+      if (resp.status === 401) return res.status(401).json({ erro: 'Token expirado. Re-autorize via link de convite.' });
       if (!resp.ok) {
         const txt = await resp.text();
-        return res.status(resp.status).json({ erro: `Bling API: ${txt}` });
+        return res.status(resp.status).json({ erro: `Bling API ${resp.status}: ${txt}` });
       }
 
       const json = await resp.json();
@@ -58,7 +68,7 @@ export default async function handler(req, res) {
 
     const filtrados = todos.filter(i => (i.categoria?.descricao || '').toLowerCase().includes('porcelana decorada'));
     const faturamento = filtrados.reduce((s, i) => s + (parseFloat(i.valor) || 0), 0);
-    console.log('[3] Resultado:', faturamento, filtrados.length);
+    console.log('[3] OK:', faturamento, filtrados.length);
 
     return res.status(200).json({ faturamento, pedidos: filtrados.length, data });
   } catch (err) {
