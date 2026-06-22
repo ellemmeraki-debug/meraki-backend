@@ -1,15 +1,15 @@
-// ── Meraki Backend · Bling API ───────────────────────────────
-// Endpoint: GET /api/bling?data=YYYY-MM-DD (padrão: hoje)
-// Retorna: { faturamento, pedidos, data }
-
 async function getAccessToken() {
   const CLIENT_ID     = process.env.BLING_CLIENT_ID;
   const CLIENT_SECRET = process.env.BLING_CLIENT_SECRET;
-  const REFRESH_TOKEN = process.env.BLING_REFRESH_TOKEN;
+  const KV_URL        = process.env.KV_REST_API_URL;
+  const KV_TOKEN      = process.env.KV_REST_API_TOKEN;
 
-  if (!CLIENT_ID || !CLIENT_SECRET || !REFRESH_TOKEN) {
-    throw new Error('Variáveis BLING_CLIENT_ID, BLING_CLIENT_SECRET ou BLING_REFRESH_TOKEN não configuradas');
-  }
+  // Lê refresh_token do Redis
+  const r = await fetch(`${KV_URL}/get/bling_refresh_token`, {
+    headers: { Authorization: `Bearer ${KV_TOKEN}` }
+  });
+  const { result: refreshToken } = await r.json();
+  if (!refreshToken) throw new Error('bling_refresh_token não encontrado no Redis. Re-autorize o app.');
 
   const credentials = Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString('base64');
 
@@ -20,23 +20,25 @@ async function getAccessToken() {
       'Content-Type': 'application/x-www-form-urlencoded',
       'Accept': '1.0'
     },
-    body: new URLSearchParams({
-      grant_type: 'refresh_token',
-      refresh_token: REFRESH_TOKEN
-    })
+    body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: refreshToken })
   });
 
   if (!resp.ok) {
     const txt = await resp.text();
-    throw new Error(`Falha ao renovar token Bling: ${txt}`);
+    throw new Error(`Falha ao renovar token: ${txt}`);
   }
 
   const data = await resp.json();
+
+  // Atualiza tokens no Redis
+  await fetch(`${KV_URL}/set/bling_refresh_token/${encodeURIComponent(data.refresh_token)}`, {
+    headers: { Authorization: `Bearer ${KV_TOKEN}` }
+  });
+
   return data.access_token;
 }
 
 export default async function handler(req, res) {
-
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -50,9 +52,7 @@ export default async function handler(req, res) {
 
   try {
     const accessToken = await getAccessToken();
-
-    let pagina = 1;
-    let todos = [];
+    let pagina = 1, todos = [];
 
     while (true) {
       const url = new URL('https://www.bling.com.br/Api/v3/contas/receber');
@@ -82,7 +82,7 @@ export default async function handler(req, res) {
     );
 
     const faturamento = filtrados.reduce((soma, i) => soma + (parseFloat(i.valor) || 0), 0);
-    const pedidos     = filtrados.length;
+    const pedidos = filtrados.length;
 
     return res.status(200).json({ faturamento, pedidos, data });
 
