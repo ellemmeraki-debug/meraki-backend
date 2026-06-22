@@ -1,51 +1,11 @@
 async function kvGet(url, token, key) {
   const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), 3000);
+  const t = setTimeout(() => ctrl.abort(), 4000);
   try {
     const r = await fetch(`${url}/get/${key}`, { headers: { Authorization: `Bearer ${token}` }, signal: ctrl.signal });
     const data = await r.json();
     return data.result;
   } finally { clearTimeout(t); }
-}
-
-async function kvSet(url, token, key, value) {
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), 3000);
-  try {
-    await fetch(`${url}/set/${key}/${encodeURIComponent(value)}`, { headers: { Authorization: `Bearer ${token}` }, signal: ctrl.signal });
-  } finally { clearTimeout(t); }
-}
-
-async function getAccessToken() {
-  const CLIENT_ID     = process.env.BLING_CLIENT_ID;
-  const CLIENT_SECRET = process.env.BLING_CLIENT_SECRET;
-  const KV_URL        = process.env.KV_REST_API_URL;
-  const KV_TOKEN      = process.env.KV_REST_API_TOKEN;
-
-  console.log('[1] Lendo refresh_token do Redis...');
-  const refreshToken = await kvGet(KV_URL, KV_TOKEN, 'bling_refresh_token');
-  if (!refreshToken) throw new Error('Nenhum token no Redis. Acesse o link de convite do Bling.');
-  console.log('[2] Token encontrado, chamando Bling OAuth...');
-
-  const credentials = Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString('base64');
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), 7000);
-  let data;
-  try {
-    const resp = await fetch('https://www.bling.com.br/Api/v3/oauth/token', {
-      method: 'POST',
-      headers: { 'Authorization': `Basic ${credentials}`, 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: refreshToken }),
-      signal: ctrl.signal
-    });
-    console.log('[3] Bling respondeu status:', resp.status);
-    data = await resp.json();
-    if (!resp.ok) throw new Error(`Bling OAuth erro: ${JSON.stringify(data)}`);
-  } finally { clearTimeout(t); }
-
-  console.log('[4] Salvando novo refresh_token...');
-  await kvSet(KV_URL, KV_TOKEN, 'bling_refresh_token', data.refresh_token);
-  return data.access_token;
 }
 
 export default async function handler(req, res) {
@@ -55,15 +15,21 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'GET') return res.status(405).json({ erro: 'Método não permitido' });
 
+  const KV_URL   = process.env.KV_REST_API_URL;
+  const KV_TOKEN = process.env.KV_REST_API_TOKEN;
+
   const hojeStr = new Date().toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
   const [dia, mes, ano] = hojeStr.split('/');
   const dataHoje = `${ano}-${mes.padStart(2,'0')}-${dia.padStart(2,'0')}`;
   const data = req.query.data || dataHoje;
 
   try {
-    console.log('[0] Iniciando /api/bling para data:', data);
-    const accessToken = await getAccessToken();
-    console.log('[5] Access token obtido, buscando Contas a Receber...');
+    console.log('[1] Lendo access_token do Redis...');
+    const accessToken = await kvGet(KV_URL, KV_TOKEN, 'bling_access_token');
+    if (!accessToken) {
+      return res.status(401).json({ erro: 'Token expirado ou ausente. Acesse o link de convite do Bling para re-autorizar.' });
+    }
+    console.log('[2] Token ok, buscando Contas a Receber...');
 
     let pagina = 1, todos = [];
     while (true) {
@@ -74,10 +40,15 @@ export default async function handler(req, res) {
       url.searchParams.set('dataVencimentoFinal', data);
 
       const resp = await fetch(url.toString(), { headers: { 'Authorization': `Bearer ${accessToken}` } });
+
+      if (resp.status === 401) {
+        return res.status(401).json({ erro: 'Access token expirado. Re-autorize via link de convite do Bling.' });
+      }
       if (!resp.ok) {
         const txt = await resp.text();
         return res.status(resp.status).json({ erro: `Bling API: ${txt}` });
       }
+
       const json = await resp.json();
       const items = json.data || [];
       todos = todos.concat(items);
@@ -87,7 +58,7 @@ export default async function handler(req, res) {
 
     const filtrados = todos.filter(i => (i.categoria?.descricao || '').toLowerCase().includes('porcelana decorada'));
     const faturamento = filtrados.reduce((s, i) => s + (parseFloat(i.valor) || 0), 0);
-    console.log('[6] Resultado:', { faturamento, pedidos: filtrados.length });
+    console.log('[3] Resultado:', faturamento, filtrados.length);
 
     return res.status(200).json({ faturamento, pedidos: filtrados.length, data });
   } catch (err) {
