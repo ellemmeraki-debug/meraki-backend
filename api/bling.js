@@ -1,39 +1,12 @@
 async function kvGet(kvUrl, kvToken, key) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 4000);
   try {
     const r = await fetch(`${kvUrl}/get/${key}`, {
       headers: { Authorization: `Bearer ${kvToken}` },
-      signal: controller.signal
+      signal: AbortSignal.timeout(4000)
     });
     const j = await r.json();
     return j.result ?? null;
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-async function blingGet(path, accessToken) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 7000);
-  try {
-    const r = await fetch(`https://www.bling.com.br${path}`, {
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        Accept: 'application/json',
-        'User-Agent': 'MerakiDashboard/1.0'
-      },
-      signal: controller.signal
-    });
-    const body = await r.text();
-    return { status: r.status, body };
-  } catch (err) {
-    throw new Error(err.name === 'AbortError' ? 'Bling timeout 7s' : err.message);
-  } finally {
-    clearTimeout(timer);
-  }
+  } catch { return null; }
 }
 
 export default async function handler(req, res) {
@@ -41,7 +14,6 @@ export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   if (req.method === 'OPTIONS') return res.status(200).end();
-  if (req.method !== 'GET') return res.status(405).json({ erro: 'Metodo nao permitido' });
 
   const KV_URL   = process.env.KV_REST_API_URL;
   const KV_TOKEN = process.env.KV_REST_API_TOKEN;
@@ -56,32 +28,49 @@ export default async function handler(req, res) {
     return res.status(401).json({ erro: 'Token ausente. Re-autorize via link de convite do Bling.' });
   }
 
-  let pagina = 1, todos = [];
-  while (true) {
-    const path = `/Api/v3/contas/receber?pagina=${pagina}&limite=100&dataVencimentoInicial=${data}&dataVencimentoFinal=${data}`;
-    let r;
-    try {
-      r = await blingGet(path, accessToken);
-    } catch(e) {
-      return res.status(504).json({ erro: e.message });
-    }
+  // Busca apenas página 1 (sem loop de paginação) para evitar timeout
+  const path = `/Api/v3/contas/receber?pagina=1&limite=100&dataVencimentoInicial=${data}&dataVencimentoFinal=${data}`;
 
-    if (r.status === 401) return res.status(401).json({ erro: 'Token expirado. Re-autorize.' });
-    if (r.status !== 200) return res.status(r.status).json({ erro: `Bling ${r.status}: ${r.body.slice(0,200)}` });
-
-    let json;
-    try { json = JSON.parse(r.body); } catch { return res.status(500).json({ erro: 'Resposta invalida do Bling', raw: r.body.slice(0,200) }); }
-
-    const items = json.data || [];
-    todos = todos.concat(items);
-    if (items.length < 100) break;
-    pagina++;
+  let blingResp;
+  try {
+    const t0 = Date.now();
+    const r = await fetch(`https://www.bling.com.br${path}`, {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Accept: 'application/json',
+        'User-Agent': 'MerakiDashboard/1.0'
+      },
+      signal: AbortSignal.timeout(7000)
+    });
+    const body = await r.text();
+    blingResp = { status: r.status, body, ms: Date.now() - t0 };
+  } catch (e) {
+    return res.status(504).json({ erro: e.message, data });
   }
 
-  const filtrados = todos.filter(i =>
+  if (blingResp.status === 401) return res.status(401).json({ erro: 'Token expirado. Re-autorize.' });
+  if (blingResp.status !== 200) {
+    return res.status(blingResp.status).json({ erro: `Bling ${blingResp.status}`, raw: blingResp.body.slice(0, 300) });
+  }
+
+  let json;
+  try { json = JSON.parse(blingResp.body); }
+  catch { return res.status(500).json({ erro: 'JSON invalido', raw: blingResp.body.slice(0, 300) }); }
+
+  const items = json.data || [];
+  const filtrados = items.filter(i =>
     (i.categoria?.descricao || '').toLowerCase().includes('porcelana decorada')
   );
   const faturamento = filtrados.reduce((s, i) => s + (parseFloat(i.valor) || 0), 0);
 
-  return res.status(200).json({ faturamento, pedidos: filtrados.length, data, total_registros: todos.length });
+  return res.status(200).json({
+    faturamento,
+    pedidos: filtrados.length,
+    data,
+    debug: {
+      total_na_pagina: items.length,
+      bling_ms: blingResp.ms,
+      categorias: [...new Set(items.map(i => i.categoria?.descricao || 'sem categoria'))].slice(0, 10)
+    }
+  });
 }
