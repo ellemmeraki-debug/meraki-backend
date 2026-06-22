@@ -8,8 +8,7 @@ async function kvGet(kvUrl, kvToken, key) {
   } catch { return null; }
 }
 
-// NUVEMSHOP DECORADA = conta contabil da Porcelana Decorada
-const CONTA_PORCELANA_ID = 14888102402;
+const CONTA_PORCELANA_ID = 14888102402; // NUVEMSHOP DECORADA
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -28,8 +27,6 @@ export default async function handler(req, res) {
   const accessToken = await kvGet(KV_URL, KV_TOKEN, 'bling_access_token');
   if (!accessToken) return res.status(401).json({ erro: 'Token ausente. Re-autorize.' });
 
-  // O filtro de data da URL do Bling nao funciona — filtramos por dataEmissao em JS.
-  // Buscamos 2 paginas (200 registros) com filtro de emissao para reduzir carga.
   let todos = [];
   for (let pagina = 1; pagina <= 2; pagina++) {
     let r;
@@ -43,7 +40,7 @@ export default async function handler(req, res) {
       );
     } catch (e) {
       if (pagina === 1) return res.status(504).json({ erro: e.message });
-      break; // se der timeout na pag 2, usa o que ja tem
+      break;
     }
     if (!r.ok) {
       if (r.status === 401) return res.status(401).json({ erro: 'Token expirado. Re-autorize.' });
@@ -52,21 +49,23 @@ export default async function handler(req, res) {
     const body = await r.json();
     const items = body.data || [];
     todos = todos.concat(items);
-    if (items.length < 100) break; // ultima pagina
+    if (items.length < 100) break;
   }
 
-  // Filtra por conta contabil (NUVEMSHOP DECORADA) + data de emissao
-  const filtrados = todos.filter(i =>
-    i.contaContabil?.id === CONTA_PORCELANA_ID &&
-    i.dataEmissao === data
-  );
-
+  // Filtra so por conta contabil — confia no filtro de data da URL
+  const filtrados = todos.filter(i => i.contaContabil?.id === CONTA_PORCELANA_ID);
   const faturamento = filtrados.reduce((s, i) => s + (parseFloat(i.valor) || 0), 0);
 
-  return res.status(200).json({
-    faturamento,
-    pedidos: filtrados.length,
-    data,
-    total_escaneado: todos.length
-  });
-                                                          }
+  // Debug: mostra datas encontradas e contas para diagnóstico
+  const debugMode = req.query.debug === '1';
+  const base = { faturamento, pedidos: filtrados.length, data, total_escaneado: todos.length };
+  if (debugMode) {
+    base.datas_emissao = [...new Set(todos.map(i => i.dataEmissao))].sort();
+    base.datas_vencimento = [...new Set(todos.map(i => i.vencimento))].sort();
+    base.contas = [...new Map(todos.map(i => [i.contaContabil?.id, i.contaContabil?.descricao])).entries()]
+      .map(([id, desc]) => ({ id, desc }));
+    base.registros_porcelana = filtrados.slice(0, 3);
+  }
+
+  return res.status(200).json(base);
+             }
