@@ -10,9 +10,7 @@ async function kvGet(kvUrl, kvToken, key) {
 
 const CONTA_PORCELANA_ID = 14888102402; // NUVEMSHOP DECORADA
 
-function lastDayOfMonth(ano, mes) {
-  return new Date(ano, mes, 0).getDate();
-}
+function lastDay(ano, mes) { return new Date(ano, mes, 0).getDate(); }
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -24,34 +22,28 @@ export default async function handler(req, res) {
   const KV_TOKEN = process.env.KV_REST_API_TOKEN;
 
   const agora = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
-  const ano = agora.getFullYear();
-  const mes = agora.getMonth() + 1; // 1-12
-  const mesStr = String(mes).padStart(2, '0');
-  const ultimo = lastDayOfMonth(ano, mes);
+  const mesParam = req.query.mes ? String(req.query.mes).padStart(2,'0') : String(agora.getMonth()+1).padStart(2,'0');
+  const anoParam = req.query.ano || String(agora.getFullYear());
+  const ultimo   = lastDay(Number(anoParam), Number(mesParam));
 
-  // Aceita ?mes=06&ano=2026 para filtrar mês específico
-  const mesParam = req.query.mes ? String(req.query.mes).padStart(2,'0') : mesStr;
-  const anoParam = req.query.ano || String(ano);
-  const ultimoParam = lastDayOfMonth(Number(anoParam), Number(mesParam));
-
-  const inicio = `01/${mesParam}/${anoParam}`; // ex: 01/06/2026
-  const fim    = `${ultimoParam}/${mesParam}/${anoParam}`; // ex: 30/06/2026
+  const inicio = `01/${mesParam}/${anoParam}`;
+  const fim    = `${ultimo}/${mesParam}/${anoParam}`;
 
   const accessToken = await kvGet(KV_URL, KV_TOKEN, 'bling_access_token');
   if (!accessToken) return res.status(401).json({ erro: 'Token ausente. Re-autorize.' });
 
-  // Busca até 10 páginas (1000 registros) — filtra mês em JS pois Bling ignora o ano
+  // Filtra diretamente pelo portador (NUVEMSHOP DECORADA) — drásticamente menos registros
   let todos = [];
-  for (let pagina = 1; pagina <= 10; pagina++) {
+  for (let pagina = 1; pagina <= 20; pagina++) {
     let r;
     try {
-      r = await fetch(
-        `https://www.bling.com.br/Api/v3/contas/receber?pagina=${pagina}&limite=100&dataEmissaoInicial=${inicio}&dataEmissaoFinal=${fim}`,
-        {
-          headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json', 'User-Agent': 'MerakiDashboard/1.0' },
-          signal: AbortSignal.timeout(8000)
-        }
-      );
+      const url = `https://www.bling.com.br/Api/v3/contas/receber?pagina=${pagina}&limite=100` +
+        `&portador=${CONTA_PORCELANA_ID}` +
+        `&dataEmissaoInicial=${inicio}&dataEmissaoFinal=${fim}`;
+      r = await fetch(url, {
+        headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json', 'User-Agent': 'MerakiDashboard/1.0' },
+        signal: AbortSignal.timeout(8000)
+      });
     } catch (e) {
       if (pagina === 1) return res.status(504).json({ erro: e.message });
       break;
@@ -63,19 +55,19 @@ export default async function handler(req, res) {
     const body = await r.json();
     const items = body.data || [];
     todos = todos.concat(items);
-    if (items.length < 100) break; // última página
+    if (items.length < 100) break;
   }
 
-  // Filtra NUVEMSHOP DECORADA + mês correto (ignora ano — Bling usa ano diferente do servidor)
-  const filtrados = todos.filter(i =>
-    i.contaContabil?.id === CONTA_PORCELANA_ID &&
-    (i.dataEmissao || '').slice(5, 7) === mesParam
-  );
+  // Se portador funcionou, todos os registros já são da conta certa.
+  // Filtra pelo mês em JS como segurança (Bling ignora o ano no filtro de URL).
+  const filtrados = todos.filter(i => (i.dataEmissao || '').slice(5, 7) === mesParam);
 
-  const faturamento = filtrados.reduce((s, i) => s + (parseFloat(i.valor) || 0), 0);
+  const faturamento = Math.round(
+    filtrados.reduce((s, i) => s + (parseFloat(i.valor) || 0), 0) * 100
+  ) / 100;
 
   const resp = {
-    faturamento: Math.round(faturamento * 100) / 100,
+    faturamento,
     pedidos: filtrados.length,
     mes: `${mesParam}/${anoParam}`,
     total_escaneado: todos.length
@@ -84,12 +76,13 @@ export default async function handler(req, res) {
   if (req.query.debug === '1') {
     resp.range_enviado = `${inicio} a ${fim}`;
     resp.datas_unicas = [...new Set(todos.map(i => i.dataEmissao))].sort();
+    resp.contas_unicas = [...new Set(todos.map(i => i.contaContabil?.descricao))];
     resp.por_dia = filtrados.reduce((acc, i) => {
-      const d = i.dataEmissao || 'sem data';
-      acc[d] = (acc[d] || 0) + (parseFloat(i.valor) || 0);
+      const d = (i.dataEmissao || 'sem-data').slice(8); // DD
+      acc[d] = Math.round(((acc[d] || 0) + (parseFloat(i.valor) || 0)) * 100) / 100;
       return acc;
     }, {});
   }
 
   return res.status(200).json(resp);
-  }
+}
