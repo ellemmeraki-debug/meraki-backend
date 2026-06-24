@@ -3,16 +3,17 @@
 
 async function kvSet(kvUrl, kvToken, key, value) {
   try {
-    const r = await fetch(`${kvUrl}/set/${key}`, {
+    const r = await fetch(`${kvUrl}/pipeline`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${kvToken}`,
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({ value }),
+      body: JSON.stringify([['SET', key, value]]),
       signal: AbortSignal.timeout(5000)
     });
-    return (await r.json()).result === 'OK';
+    const data = await r.json();
+    return data[0]?.result === 'OK';
   } catch { return false; }
 }
 
