@@ -27,9 +27,8 @@ export default async function handler(req, res) {
                                  : String(agora.getMonth()+1).padStart(2,'0');
   const ultimo = lastDay(Number(anoParam), Number(mesParam));
 
-  // Exatamente o mesmo filtro que o Bling usa na interface: dataVencimento DD/MM/YYYY + situacao=2
-  const inicio = `01/${mesParam}/${anoParam}`;
-  const fim    = `${ultimo}/${mesParam}/${anoParam}`;
+  const inicio = `01/${mesParam}/${anoParam}`; // ex: 01/06/2026
+  const fim    = `${ultimo}/${mesParam}/${anoParam}`; // ex: 30/06/2026
 
   const accessToken = await kvGet(KV_URL, KV_TOKEN, 'bling_access_token');
   if (!accessToken) return res.status(401).json({ erro: 'Token ausente. Re-autorize.' });
@@ -38,10 +37,10 @@ export default async function handler(req, res) {
   for (let pagina = 1; pagina <= 5; pagina++) {
     let r;
     try {
-      // situacoes[]=2 = Recebidas (igual ao filtro do Bling)
+      // Tenta filtrar por data de PAGAMENTO (liquidacao) + situacao Recebida
       const url = `https://www.bling.com.br/Api/v3/contas/receber?pagina=${pagina}&limite=100` +
         `&situacoes[]=2` +
-        `&dataVencimentoInicial=${inicio}&dataVencimentoFinal=${fim}`;
+        `&dataPagamentoInicial=${inicio}&dataPagamentoFinal=${fim}`;
       r = await fetch(url, {
         headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json', 'User-Agent': 'MerakiDashboard/1.0' },
         signal: AbortSignal.timeout(8000)
@@ -60,12 +59,8 @@ export default async function handler(req, res) {
     if (items.length < 100) break;
   }
 
-  // Filtra por contaContabil (NUVEMSHOP DECORADA) + vencimento no mês correto
   const prefixo = `${anoParam}-${mesParam}`;
-  const filtrados = todos.filter(i =>
-    i.contaContabil?.id === CONTA_PORCELANA_ID &&
-    (i.vencimento || '').startsWith(prefixo)
-  );
+  const filtrados = todos.filter(i => i.contaContabil?.id === CONTA_PORCELANA_ID);
 
   const faturamento = Math.round(
     filtrados.reduce((s, i) => s + (parseFloat(i.valor) || 0), 0) * 100
@@ -80,14 +75,11 @@ export default async function handler(req, res) {
 
   if (req.query.debug === '1') {
     resp.range = `${inicio} a ${fim}`;
-    resp.vencimentos_unicos = [...new Set(todos.map(i => i.vencimento))].sort().slice(0, 20);
+    // Mostra todos os campos do primeiro registro para diagnóstico
+    resp.primeiro_registro_raw = todos[0] || null;
+    resp.vencimentos = [...new Set(todos.map(i => i.vencimento))].sort().slice(0, 10);
     resp.contas = [...new Set(todos.map(i => i.contaContabil?.descricao))].filter(Boolean);
-    resp.por_dia = filtrados.reduce((acc, i) => {
-      const d = (i.vencimento || '').slice(8);
-      acc[d] = Math.round(((acc[d] || 0) + parseFloat(i.valor || 0)) * 100) / 100;
-      return acc;
-    }, {});
   }
 
   return res.status(200).json(resp);
-      }
+}
