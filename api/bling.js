@@ -8,8 +8,6 @@ async function kvGet(kvUrl, kvToken, key) {
   } catch { return null; }
 }
 
-const CONTA_PORCELANA_ID = 14888102402; // NUVEMSHOP DECORADA
-
 function lastDay(ano, mes) { return new Date(ano, mes, 0).getDate(); }
 
 export default async function handler(req, res) {
@@ -25,22 +23,21 @@ export default async function handler(req, res) {
   const anoParam = req.query.ano || String(agora.getFullYear());
   const mesParam = req.query.mes ? String(req.query.mes).padStart(2,'0')
                                  : String(agora.getMonth()+1).padStart(2,'0');
-  const ultimo = lastDay(Number(anoParam), Number(mesParam));
+  const ultimo   = lastDay(Number(anoParam), Number(mesParam));
 
-  const inicio = `01/${mesParam}/${anoParam}`; // ex: 01/06/2026
-  const fim    = `${ultimo}/${mesParam}/${anoParam}`; // ex: 30/06/2026
+  const inicio = `01/${mesParam}/${anoParam}`; // 01/06/2026
+  const fim    = `${ultimo}/${mesParam}/${anoParam}`; // 30/06/2026
 
   const accessToken = await kvGet(KV_URL, KV_TOKEN, 'bling_access_token');
   if (!accessToken) return res.status(401).json({ erro: 'Token ausente. Re-autorize.' });
 
+  // Usa endpoint de PEDIDOS DE VENDA — filtro de data funciona aqui
   let todos = [];
   for (let pagina = 1; pagina <= 5; pagina++) {
     let r;
     try {
-      // Tenta filtrar por data de PAGAMENTO (liquidacao) + situacao Recebida
-      const url = `https://www.bling.com.br/Api/v3/contas/receber?pagina=${pagina}&limite=100` +
-        `&situacoes[]=2` +
-        `&dataPagamentoInicial=${inicio}&dataPagamentoFinal=${fim}`;
+      const url = `https://www.bling.com.br/Api/v3/pedidos/vendas?pagina=${pagina}&limite=100` +
+        `&dataInicial=${inicio}&dataFinal=${fim}`;
       r = await fetch(url, {
         headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json', 'User-Agent': 'MerakiDashboard/1.0' },
         signal: AbortSignal.timeout(8000)
@@ -50,8 +47,9 @@ export default async function handler(req, res) {
       break;
     }
     if (!r.ok) {
+      const txt = await r.text().catch(() => '');
       if (r.status === 401) return res.status(401).json({ erro: 'Token expirado. Re-autorize.' });
-      break;
+      return res.status(r.status).json({ erro: `Bling ${r.status}`, raw: txt.slice(0,300) });
     }
     const body = await r.json();
     const items = body.data || [];
@@ -59,27 +57,14 @@ export default async function handler(req, res) {
     if (items.length < 100) break;
   }
 
-  const prefixo = `${anoParam}-${mesParam}`;
-  const filtrados = todos.filter(i => i.contaContabil?.id === CONTA_PORCELANA_ID);
-
-  const faturamento = Math.round(
-    filtrados.reduce((s, i) => s + (parseFloat(i.valor) || 0), 0) * 100
-  ) / 100;
-
   const resp = {
-    faturamento,
-    pedidos: filtrados.length,
     mes: `${mesParam}/${anoParam}`,
-    total_escaneado: todos.length
+    total_pedidos: todos.length,
+    // Debug: estrutura do primeiro pedido para identificar campos e loja
+    primeiro_pedido: todos[0] || null,
+    lojas_unicas: [...new Set(todos.map(i => JSON.stringify(i.loja || i.canal || i.numeroPedidoLoja || i.tipoIntegracao || 'sem-loja')))].slice(0, 10),
+    datas: [...new Set(todos.map(i => i.data || i.dataEmissao || i.dataPedido || '?'))].sort().slice(0, 10)
   };
 
-  if (req.query.debug === '1') {
-    resp.range = `${inicio} a ${fim}`;
-    // Mostra todos os campos do primeiro registro para diagnóstico
-    resp.primeiro_registro_raw = todos[0] || null;
-    resp.vencimentos = [...new Set(todos.map(i => i.vencimento))].sort().slice(0, 10);
-    resp.contas = [...new Set(todos.map(i => i.contaContabil?.descricao))].filter(Boolean);
-  }
-
   return res.status(200).json(resp);
-}
+        }
