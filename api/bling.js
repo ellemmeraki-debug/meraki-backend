@@ -10,9 +10,8 @@ async function kvGet(kvUrl, kvToken, key) {
 
 const CONTA_PORCELANA_ID = 14888102402; // NUVEMSHOP DECORADA
 
-function toBrDate(iso) {
-  const [y, m, d] = iso.split('-');
-  return `${d}/${m}/${y}`;
+function lastDayOfMonth(ano, mes) {
+  return new Date(ano, mes, 0).getDate();
 }
 
 export default async function handler(req, res) {
@@ -24,26 +23,33 @@ export default async function handler(req, res) {
   const KV_URL   = process.env.KV_REST_API_URL;
   const KV_TOKEN = process.env.KV_REST_API_TOKEN;
 
-  const hojeStr = new Date().toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
-  const [dia, mes, ano] = hojeStr.split('/');
-  const dataIso = req.query.data || `${ano}-${mes.padStart(2,'0')}-${dia.padStart(2,'0')}`;
-  const dataBr  = toBrDate(dataIso);
+  const agora = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
+  const ano = agora.getFullYear();
+  const mes = agora.getMonth() + 1; // 1-12
+  const mesStr = String(mes).padStart(2, '0');
+  const ultimo = lastDayOfMonth(ano, mes);
 
-  // O Bling ignora o ano no filtro de URL — filtramos por MM-DD em JS como segurança
-  const mmDd = dataIso.slice(5); // ex: "06-24"
+  // Aceita ?mes=06&ano=2026 para filtrar mês específico
+  const mesParam = req.query.mes ? String(req.query.mes).padStart(2,'0') : mesStr;
+  const anoParam = req.query.ano || String(ano);
+  const ultimoParam = lastDayOfMonth(Number(anoParam), Number(mesParam));
+
+  const inicio = `01/${mesParam}/${anoParam}`; // ex: 01/06/2026
+  const fim    = `${ultimoParam}/${mesParam}/${anoParam}`; // ex: 30/06/2026
 
   const accessToken = await kvGet(KV_URL, KV_TOKEN, 'bling_access_token');
   if (!accessToken) return res.status(401).json({ erro: 'Token ausente. Re-autorize.' });
 
+  // Busca até 10 páginas (1000 registros) — filtra mês em JS pois Bling ignora o ano
   let todos = [];
-  for (let pagina = 1; pagina <= 3; pagina++) {
+  for (let pagina = 1; pagina <= 10; pagina++) {
     let r;
     try {
       r = await fetch(
-        `https://www.bling.com.br/Api/v3/contas/receber?pagina=${pagina}&limite=100&dataEmissaoInicial=${dataBr}&dataEmissaoFinal=${dataBr}`,
+        `https://www.bling.com.br/Api/v3/contas/receber?pagina=${pagina}&limite=100&dataEmissaoInicial=${inicio}&dataEmissaoFinal=${fim}`,
         {
           headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json', 'User-Agent': 'MerakiDashboard/1.0' },
-          signal: AbortSignal.timeout(6000)
+          signal: AbortSignal.timeout(8000)
         }
       );
     } catch (e) {
@@ -57,22 +63,33 @@ export default async function handler(req, res) {
     const body = await r.json();
     const items = body.data || [];
     todos = todos.concat(items);
-    if (items.length < 100) break;
+    if (items.length < 100) break; // última página
   }
 
-  // Filtra por conta contabil + MM-DD (ignora ano pois Bling usa ano diferente do servidor)
+  // Filtra NUVEMSHOP DECORADA + mês correto (ignora ano — Bling usa ano diferente do servidor)
   const filtrados = todos.filter(i =>
     i.contaContabil?.id === CONTA_PORCELANA_ID &&
-    (i.dataEmissao || '').slice(5) === mmDd
+    (i.dataEmissao || '').slice(5, 7) === mesParam
   );
 
   const faturamento = filtrados.reduce((s, i) => s + (parseFloat(i.valor) || 0), 0);
 
-  const resp = { faturamento, pedidos: filtrados.length, data: dataIso, total_escaneado: todos.length };
+  const resp = {
+    faturamento: Math.round(faturamento * 100) / 100,
+    pedidos: filtrados.length,
+    mes: `${mesParam}/${anoParam}`,
+    total_escaneado: todos.length
+  };
+
   if (req.query.debug === '1') {
-    resp.mmDd_buscado = mmDd;
-    resp.datas_emissao_unicas = [...new Set(todos.map(i => i.dataEmissao))].sort();
-    resp.porcelana_datas = filtrados.map(i => ({ data: i.dataEmissao, valor: i.valor }));
+    resp.range_enviado = `${inicio} a ${fim}`;
+    resp.datas_unicas = [...new Set(todos.map(i => i.dataEmissao))].sort();
+    resp.por_dia = filtrados.reduce((acc, i) => {
+      const d = i.dataEmissao || 'sem data';
+      acc[d] = (acc[d] || 0) + (parseFloat(i.valor) || 0);
+      return acc;
+    }, {});
   }
+
   return res.status(200).json(resp);
-}
+  }
