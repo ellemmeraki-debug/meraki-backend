@@ -33,11 +33,12 @@ export default async function handler(req, res) {
   let gasto = null;
   let atualizadoEm = null;
 
+  // Pega a ÚLTIMA linha do mês (mais recente, caso haja duplicatas)
   for (const linha of linhas) {
     if (linha[0] === mesAlvo) {
       gasto = parseFloat(linha[1]) || 0;
       atualizadoEm = linha[2] || null;
-      break;
+      // não faz break — continua para pegar a última ocorrência
     }
   }
 
