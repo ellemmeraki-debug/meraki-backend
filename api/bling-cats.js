@@ -17,7 +17,7 @@ export default async function handler(req, res) {
   const headers = { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' };
 
   const CATEGORIA_ID = '14633100460';
-  const probe = [60, 80, 100, 120, 140, 160, 180, 200];
+  const probe = [202, 205, 208, 211, 214, 217, 220, 223, 226, 230];
   const debug = [];
 
   for (const p of probe) {
@@ -29,7 +29,8 @@ export default async function handler(req, res) {
       const body = await r.json();
       const items = body.data || [];
       if (items.length === 0) { debug.push(`p${p}: VAZIO`); break; }
-      debug.push(`p${p}: ${items[0].vencimento}..${items[items.length-1].vencimento} (${items.length})`);
+      const junhoCount = items.filter(i => (i.vencimento||'').startsWith('2026-06')).length;
+      debug.push(`p${p}: ${items[0].vencimento}..${items[items.length-1].vencimento} | junho: ${junhoCount}`);
     } catch(e) {
       debug.push(`p${p}: ERRO ${e.message}`);
     }
