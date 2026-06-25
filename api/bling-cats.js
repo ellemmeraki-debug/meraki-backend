@@ -16,28 +16,38 @@ export default async function handler(req, res) {
   if (!accessToken) return res.status(401).json({ erro: 'Token ausente' });
   const headers = { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' };
 
-  // Pega 3 registros da Nuvemshop Decorada (portador 14888102402)
-  const listR = await fetch(
-    'https://www.bling.com.br/Api/v3/contas/receber?pagina=30&limite=3&situacao=2&idPortador=14888102402',
-    { headers, signal: AbortSignal.timeout(10000) }
-  );
-  const listBody = await listR.json();
-  const ids = (listBody.data || []).map(r => r.id);
+  const CATEGORIA_ID = '14633100460'; // Recebimentos Porcelana Decorada
+  const prefixo = '2026-06';
+  let total = 0, registros = 0;
+  const debug = [];
 
-  // Busca detalhe do primeiro para ver categoria
-  const results = [];
-  for (const id of ids) {
-    const dr = await fetch(`https://www.bling.com.br/Api/v3/contas/receber/${id}`,
-      { headers, signal: AbortSignal.timeout(8000) });
-    const d = await dr.json();
-    const rec = d.data || d;
-    results.push({
-      id, valor: rec.valor, vencimento: rec.vencimento,
-      contaContabil: rec.contaContabil,
-      portador: rec.portador,
-      categoria: rec.categoria
-    });
+  for (let p = 1; p <= 50; p++) {
+    const r = await fetch(
+      `https://www.bling.com.br/Api/v3/contas/receber?pagina=${p}&limite=100&situacao=2&idCategoria=${CATEGORIA_ID}`,
+      { headers, signal: AbortSignal.timeout(12000) }
+    );
+    const body = await r.json();
+    const items = body.data || [];
+    if (items.length === 0) { debug.push(`p${p}: vazio (fim)`); break; }
+    
+    const first = items[0].vencimento;
+    const last  = items[items.length-1].vencimento;
+    debug.push(`p${p}: ${first}..${last} (${items.length} items)`);
+    
+    for (const item of items) {
+      if ((item.vencimento||'').startsWith(prefixo)) {
+        total += parseFloat(item.valor) || 0;
+        registros++;
+      }
+    }
+    if (items.length < 100) break;
   }
 
-  return res.status(200).json({ nuvemshop_records: results });
+  return res.status(200).json({
+    categoria_id: CATEGORIA_ID,
+    mes: '06/2026',
+    faturamento: Math.round(total * 100) / 100,
+    registros,
+    debug
+  });
 }
