@@ -35,6 +35,7 @@ export default async function handler(req, res) {
   let totalRegistros   = 0;
   let paginasLidas     = 0;
   const debugDatas     = [];
+  const idsVistos      = new Set(); // deduplicação — Bling repete registros em páginas não-monotônicas
 
   for (let pagina = startPage; pagina <= endPage; pagina++) {
     let r;
@@ -72,8 +73,11 @@ export default async function handler(req, res) {
 
     for (const item of items) {
       if ((item.vencimento || '').startsWith(prefixo)) {
-        totalFaturamento += parseFloat(item.valor) || 0;
-        totalRegistros++;
+        if (!idsVistos.has(item.id)) {
+          idsVistos.add(item.id);
+          totalFaturamento += parseFloat(item.valor) || 0;
+          totalRegistros++;
+        }
       }
     }
 
