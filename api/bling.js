@@ -23,9 +23,10 @@ export default async function handler(req, res) {
                                  : String(agora.getMonth()+1).padStart(2,'0');
   const prefixo = `${anoParam}-${mesParam}`;
 
-  const PORTADOR_ID = '14888102402';
-  const startPage = parseInt(req.query.startPage || '26', 10);
-  const endPage   = parseInt(req.query.endPage   || '40', 10);
+  // Categoria "Recebimentos Porcelana Decorada" — inclui todos os canais
+  const CATEGORIA_ID = '14633100460';
+  const startPage = parseInt(req.query.startPage || '200', 10);
+  const endPage   = parseInt(req.query.endPage   || '220', 10);
 
   const accessToken = await kvGet(KV_URL, KV_TOKEN, 'bling_access_token');
   if (!accessToken) return res.status(401).json({ erro: 'Token ausente. Re-autorize.' });
@@ -39,7 +40,7 @@ export default async function handler(req, res) {
     let r;
     try {
       r = await fetch(
-        `https://www.bling.com.br/Api/v3/contas/receber?pagina=${pagina}&limite=100&situacao=2&idPortador=${PORTADOR_ID}`,
+        `https://www.bling.com.br/Api/v3/contas/receber?pagina=${pagina}&limite=100&situacao=2&idCategoria=${CATEGORIA_ID}`,
         {
           headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
           signal: AbortSignal.timeout(12000)
