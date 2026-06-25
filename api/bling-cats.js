@@ -17,7 +17,7 @@ export default async function handler(req, res) {
   const headers = { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' };
 
   const CATEGORIA_ID = '14633100460';
-  const probe = [1, 5, 10, 15, 20, 25, 30, 35, 40];
+  const probe = [60, 80, 100, 120, 140, 160, 180, 200];
   const debug = [];
 
   for (const p of probe) {
