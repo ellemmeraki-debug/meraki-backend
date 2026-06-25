@@ -50,8 +50,8 @@ async function fetchSituacao(accessToken, situacao, dataInicio, dataFim) {
     if (items.length < 100) break;
     pagina++;
 
-    // Limite de segurança: 30 páginas por situação
-    if (pagina > 30) break;
+    // Limite de segurança: 5 páginas por situação (= 500 registros)
+    if (pagina > 5) break;
   }
 
   return { total: Math.round(total * 100) / 100, registros };
