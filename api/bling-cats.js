@@ -18,34 +18,22 @@ export default async function handler(req, res) {
 
   const headers = { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' };
 
-  // Testa vários endpoints de categorias para achar o certo
-  const endpoints = [
-    '/Api/v3/categorias/receitas',
-    '/Api/v3/planosContas',
-    '/Api/v3/planoContas',
-    '/Api/v3/categorias',
-  ];
-
-  const results = {};
-  for (const ep of endpoints) {
-    try {
-      const r = await fetch(`https://www.bling.com.br${ep}?pagina=1&limite=5`, {
-        headers, signal: AbortSignal.timeout(6000)
-      });
-      const body = await r.json();
-      results[ep] = { status: r.status, data: body };
-    } catch(e) {
-      results[ep] = { erro: e.message };
-    }
-  }
-
-  // Também pega um registro de contas a receber para ver os campos de categoria
-  const rc = await fetch(
-    'https://www.bling.com.br/Api/v3/contas/receber?pagina=30&limite=1&situacao=2&idPortador=14888102402',
-    { headers, signal: AbortSignal.timeout(8000) }
+  // Pega lista de registros na página 30 (tem junho 2026)
+  const listR = await fetch(
+    'https://www.bling.com.br/Api/v3/contas/receber?pagina=30&limite=5&situacao=2',
+    { headers, signal: AbortSignal.timeout(10000) }
   );
-  const rcBody = await rc.json();
-  const sample = rcBody.data?.[0] || null;
+  const listBody = await listR.json();
+  const firstId = listBody.data?.[0]?.id;
 
-  return res.status(200).json({ endpoints: results, sample_record: sample });
+  if (!firstId) return res.status(200).json({ erro: 'Sem registros', listBody });
+
+  // Busca o registro completo pelo ID
+  const detailR = await fetch(
+    `https://www.bling.com.br/Api/v3/contas/receber/${firstId}`,
+    { headers, signal: AbortSignal.timeout(10000) }
+  );
+  const detail = await detailR.json();
+
+  return res.status(200).json({ id: firstId, full_record: detail });
 }
