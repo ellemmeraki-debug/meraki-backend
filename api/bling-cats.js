@@ -16,30 +16,29 @@ export default async function handler(req, res) {
   const accessToken = await kvGet(KV_URL, KV_TOKEN, 'bling_access_token');
   if (!accessToken) return res.status(401).json({ erro: 'Token ausente' });
 
-  const situacao = req.query.situacao || '2';
-  const pagina   = req.query.pagina   || '1';
-  const di       = req.query.di       || '2026-06-01';
-  const df       = req.query.df       || '2026-06-30';
-
-  const url = `https://www.bling.com.br/Api/v3/contas/receber?pagina=${pagina}&limite=100&situacao=${situacao}&dataVencimentoInicial=${di}&dataVencimentoFinal=${df}`;
+  const pagina = req.query.pagina || '26';
+  const url = `https://www.bling.com.br/Api/v3/contas/receber?pagina=${pagina}&limite=100&situacao=2&idPortador=14888102402`;
 
   const t0 = Date.now();
-  const r = await fetch(url, {
-    headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
-    signal: AbortSignal.timeout(15000)
-  });
+  let r;
+  try {
+    r = await fetch(url, {
+      headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
+      signal: AbortSignal.timeout(8000)
+    });
+  } catch(e) {
+    return res.status(200).json({ erro: e.message, ms: Date.now() - t0 });
+  }
   const ms = Date.now() - t0;
+
+  if (r.status === 401) return res.status(200).json({ erro: 'Token expirado (401)', ms });
 
   const body = await r.json();
   const items = body.data || [];
-
   return res.status(200).json({
-    url,
-    status: r.status,
-    ms,
-    total_items: items.length,
-    datas: items.slice(0, 5).map(i => ({ id: i.id, vencimento: i.vencimento, valor: i.valor })),
+    pagina, status: r.status, ms,
+    count: items.length,
     primeiro: items[0]?.vencimento,
-    ultimo: items[items.length - 1]?.vencimento
+    ultimo: items[items.length-1]?.vencimento
   });
 }
