@@ -2,7 +2,7 @@
 // A planilha é atualizada pelo Google Ads Script rodando dentro do Google Ads
 
 const SHEET_ID = '1USMLshUYitLjhaAN9zWLJaVvdYl9P4SLQKDCPaWUVj0';
-const CSV_URL  = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv`;
+const CSV_URL  = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=tsv`;
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -16,11 +16,11 @@ export default async function handler(req, res) {
                                  : String(agora.getMonth() + 1).padStart(2, '0');
   const mesAlvo = `${anoParam}-${mesParam}`;
 
-  let csv;
+  let tsv;
   try {
     const r = await fetch(CSV_URL, { signal: AbortSignal.timeout(10000) });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    csv = await r.text();
+    tsv = await r.text();
   } catch (e) {
     return res.status(200).json({
       erro: `Não foi possível ler a planilha: ${e.message}`,
@@ -28,7 +28,7 @@ export default async function handler(req, res) {
     });
   }
 
-  const linhas = csv.trim().split('\n').map(l => l.split(',').map(c => c.replace(/"/g, '').trim()));
+  const linhas = tsv.trim().split('\n').map(l => l.split('\t').map(c => c.replace(/"/g, '').trim()));
 
   let gasto = null;
   let atualizadoEm = null;
@@ -36,9 +36,10 @@ export default async function handler(req, res) {
   // Pega a ÚLTIMA linha do mês (mais recente, caso haja duplicatas)
   for (const linha of linhas) {
     if (linha[0] === mesAlvo) {
-      gasto = parseFloat(linha[1]) || 0;
+      // Normaliza formato BR (3.026,58 → 3026.58) ou US (3026.58)
+      const raw = (linha[1] || '0').replace(/\./g, '').replace(',', '.');
+      gasto = parseFloat(raw) || 0;
       atualizadoEm = linha[2] || null;
-      // não faz break — continua para pegar a última ocorrência
     }
   }
 
